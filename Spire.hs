@@ -1,11 +1,15 @@
-{-# LANGUAGE ApplicativeDo    #-}
-{-# LANGUAGE BangPatterns     #-}
-{-# LANGUAGE BlockArguments   #-}
-{-# LANGUAGE DeriveFunctor    #-}
-{-# LANGUAGE RecordWildCards  #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ApplicativeDo      #-}
+{-# LANGUAGE BangPatterns       #-}
+{-# LANGUAGE BlockArguments     #-}
+{-# LANGUAGE DeriveFunctor      #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE RecordWildCards    #-}
+{-# LANGUAGE TypeApplications   #-}
+{-# LANGUAGE TypeFamilies       #-}
+{-# LANGUAGE TypeOperators      #-}
 
-{-# OPTIONS_GHC -Wall #-}
+{-# OPTIONS_GHC -Wall -Wno-orphans #-}
 
 module Main where
 
@@ -13,14 +17,18 @@ import Control.Monad.State.Strict (StateT)
 import Control.Monad.Trans.Class (lift)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map, (!))
+import Data.MemoTrie (HasTrie(..), Reg, type (:->:))
+import GHC.Generics (Generic)
 import Prelude hiding (subtract)
 
 import qualified Control.Monad              as Monad
 import qualified Control.Monad.State.Strict as State
+import qualified Data.MemoTrie              as MemoTrie
 import qualified Data.List                  as List
 import qualified Data.List.NonEmpty         as NonEmpty
 import qualified Data.Map.Strict            as Map
 import qualified Data.Ord                   as Ord
+import qualified GHC.Generics               as Generics
 import qualified Text.Show.Pretty           as Pretty
 
 data Possible a = Possible { weight :: !Int, outcome :: !a }
@@ -52,38 +60,30 @@ expectationValue distribution =
     tally possible = fromIntegral (weight possible) * outcome possible
 
 play
-    :: (Fractional n, Ord n)
+    :: (Fractional n, Ord n, HasTrie status)
     => (status -> n)
     -> (status -> Bool)
     -> (status -> NonEmpty (Distribution status))
     -> status
     -> Distribution status
-play objective done choices = loop
+play objective done choices = MemoTrie.memoFix memoized
   where
-    loop status
+    memoized loop status
         | done status = do
             pure status
         | otherwise = do
-            nextStatus <- pick objective done choices status
+            nextStatus <- pick status
 
             loop nextStatus
+      where
+        pick status_ = List.maximumBy (Ord.comparing predict) (choices status_)
 
-pick
-    :: (Fractional n, Ord n)
-    => (status -> n)
-    -> (status -> Bool)
-    -> (status -> NonEmpty (Distribution status))
-    -> status
-    -> Distribution status
-pick objective done choices status =
-    List.maximumBy (Ord.comparing predict) (choices status)
-  where
-    predict option = expectationValue do
-        nextStatus <- option
+        predict option = expectationValue do
+            nextStatus <- option
 
-        finalStatus <- play objective done choices nextStatus
+            finalStatus <- loop nextStatus
 
-        return (objective finalStatus)
+            return (objective finalStatus)
 
 prune :: Ord key => Distribution key -> Distribution key
 prune = mapToDistribution . distributionToMap
@@ -98,7 +98,8 @@ prune = mapToDistribution . distributionToMap
 
         return Possible{..}
 
-data Card = Bash | Strike | Defend | Ascender'sBane deriving (Eq, Ord, Show)
+data Card = Bash | Strike | Defend | Ascender'sBane
+    deriving (Eq, Generic, Ord, Show)
 
 data Status = Status
     { cultistHealth        :: !Int
@@ -110,7 +111,40 @@ data Status = Status
     , ironcladBlock        :: !Int
     , energy               :: !Int
     , turn                 :: !Int
-    } deriving (Eq, Ord, Show)
+    } deriving (Eq, Generic, Ord, Show)
+
+instance HasTrie Status where
+    newtype (Status :->: b) = StatusTrie { unStatusTrie :: Reg Status :->: b }
+
+    trie = MemoTrie.trieGeneric StatusTrie
+
+    untrie = MemoTrie.untrieGeneric unStatusTrie
+
+    enumerate = MemoTrie.enumerateGeneric unStatusTrie
+
+instance HasTrie Card where
+    newtype (Card :->: b) = CardTrie { unCardTrie :: Reg Card :->: b }
+
+    trie = MemoTrie.trieGeneric CardTrie
+
+    untrie = MemoTrie.untrieGeneric unCardTrie
+
+    enumerate = MemoTrie.enumerateGeneric unCardTrie
+
+instance (HasTrie k, HasTrie v, Ord k) => HasTrie (Map k v) where
+    newtype (Map k v :->: b) = MapTrie { unMapTrie :: Reg [(k, v)] :->: b }
+
+    trie f = MapTrie (trie (f . Map.fromAscList . Generics.to))
+      -- f :: (Map k v -> b) -> (Map k v :-> b)
+      --
+      -- MapTrie :: (Reg [(k, v)]
+      --
+      -- MemoTrie.trieGeneric MapTrie
+
+    untrie t a = untrie (unMapTrie t) (Generics.from (Map.toList a))
+
+    enumerate t =
+      [ (Map.fromAscList (Generics.to a), b) | (a, b) <- enumerate (unMapTrie t) ]
 
 drawMany :: Int -> StateT Status Distribution ()
 drawMany n = do
@@ -147,7 +181,7 @@ possibleInitialStatuses = do
 
         let graveyard = Map.empty
 
-        cultistHealth <- pure 50 -- 50 :| [ 51 .. 56 ]
+        cultistHealth <- 50 :| [ 51 .. 56 ]
 
         let cultistVulnerability = 0
 
@@ -387,7 +421,7 @@ game = prune do
     let objective = fromIntegral . ironcladHealth
 
     let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
-                    || 6 <= turn status
+                    -- || 6 <= turn status
 
     initialStatus <- possibleInitialStatuses
 
