@@ -1,22 +1,27 @@
-{-# LANGUAGE ApplicativeDo   #-}
-{-# LANGUAGE BangPatterns    #-}
-{-# LANGUAGE BlockArguments  #-}
-{-# LANGUAGE DeriveFunctor   #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ApplicativeDo    #-}
+{-# LANGUAGE BangPatterns     #-}
+{-# LANGUAGE BlockArguments   #-}
+{-# LANGUAGE DeriveFunctor    #-}
+{-# LANGUAGE RecordWildCards  #-}
+{-# LANGUAGE TypeApplications #-}
+
+{-# OPTIONS_GHC -Wall #-}
 
 module Main where
 
-import Control.Applicative (empty)
+import Control.Monad.State.Strict (StateT)
+import Control.Monad.Trans.Class (lift)
 import Data.List.NonEmpty (NonEmpty(..))
-import Data.Map (Map)
+import Data.Map (Map, (!))
+import Prelude hiding (subtract)
 
-import qualified Control.Monad      as Monad
-import qualified Data.List          as List
-import qualified Data.List.NonEmpty as NonEmpty
-import qualified Data.Map.Strict    as Map
-import qualified Data.Ord           as Ord
-import qualified Text.Show.Pretty   as Pretty
+import qualified Control.Monad              as Monad
+import qualified Control.Monad.State.Strict as State
+import qualified Data.List                  as List
+import qualified Data.List.NonEmpty         as NonEmpty
+import qualified Data.Map.Strict            as Map
+import qualified Data.Ord                   as Ord
+import qualified Text.Show.Pretty           as Pretty
 
 data Possible a = Possible { weight :: !Int, outcome :: !a }
     deriving (Functor, Show)
@@ -25,7 +30,7 @@ newtype Distribution a = Distribution { possibilities :: NonEmpty (Possible a) }
     deriving (Functor, Show)
 
 instance Applicative Distribution where
-    pure x = Distribution [ Possible 1 x ]
+    pure x = Distribution (pure (Possible 1 x))
 
     (<*>) = Monad.ap
 
@@ -93,7 +98,7 @@ prune = mapToDistribution . distributionToMap
 
         return Possible{..}
 
-data Card = Strike | Defend | Ascender'sBane | Bash deriving (Eq, Ord, Show)
+data Card = Bash | Strike | Defend | Ascender'sBane deriving (Eq, Ord, Show)
 
 data Status = Status
     { cultistHealth        :: !Int
@@ -120,7 +125,7 @@ draw status = prune do
                     return status
                         { deck = newDeck
                         , hand = increment card (hand status)
-                        , graveyard = []
+                        , graveyard = Map.empty
                         }
         Just distribution -> do
             (card, newDeck) <- distribution
@@ -131,26 +136,42 @@ draw status = prune do
                 }
 
 drawMany :: Int -> Status -> Distribution Status
-drawMany 0 status = do
-    return status
-drawMany !n status = do
-    newStatus <- draw status
+drawMany n status =
+    case subsetsOf n (deck status) of
+        Nothing -> do
+            -- We ran out of cards, so draw out the entire deck and shuffle
+            -- in the graveyard so that we can draw the remaining cards
+            let drawnCards = deck status
 
-    drawMany (n - 1) newStatus
+            let shuffledStatus = status
+                    { graveyard = Map.empty
+                    , hand = Map.unionWith (+) drawnCards (hand status)
+                    , deck = graveyard status
+                    }
 
+            drawMany (n - sum (Map.elems drawnCards)) shuffledStatus
+
+        Just distribution -> do
+            (drawnCards, newDeck) <- distribution
+
+            return status
+                { deck = newDeck
+                , hand = Map.unionWith (+) drawnCards (hand status)
+                }
+            
 handSize :: Int
-handSize = 3
+handSize = 5
 
 possibleInitialStatuses :: Distribution Status
 possibleInitialStatuses = do
     status <- Distribution do
-        let deck = [ (Strike, 5), (Defend, 4), (Bash, 1), (Ascender'sBane, 1) ]
+        let deck = Map.fromList [ (Strike, 3), (Defend, 3) ]
 
-        let hand = []
+        let hand = Map.fromList [ (Strike, 2), (Bash, 1), (Ascender'sBane, 1), (Defend, 1) ]
 
-        let graveyard = []
+        let graveyard = Map.empty
 
-        cultistHealth <- pure 56 -- [ 50 .. 56 ]
+        cultistHealth <- pure 50 -- [ 50 .. 56 ]
 
         let cultistVulnerability = 0
 
@@ -168,7 +189,7 @@ possibleInitialStatuses = do
 
         return Possible{..}
 
-    drawMany handSize status
+    return status
 
 select :: Ord k => Map k Int -> Maybe (Distribution (k, Map k Int))
 select oldMap = do
@@ -183,19 +204,139 @@ select oldMap = do
             return (Possible { weight = count, outcome = (key, newMap) })
         }
 
-decrement :: Ord k => k -> Map k Int -> Map k Int
-decrement = Map.update f
+subtract :: Ord k => Int -> k -> Map k Int -> Map k Int
+subtract n = Map.update f
   where
-    f n | n <= 1    = Nothing
-        | otherwise = Just (n - 1)
+    f v | v <= n    = Nothing
+        | otherwise = Just (v - n)
+
+decrement :: Ord k => k -> Map k Int -> Map k Int
+decrement = subtract 1
+
+add :: Ord k => Int -> k -> Map k Int -> Map k Int
+add 0 _ = id
+add n k = Map.insertWith (+) k n
 
 increment :: Ord k => k -> Map k Int -> Map k Int
-increment k = Map.insertWith (+) k 1
+increment = add 1
 
-choices :: Status -> NonEmpty (Distribution Status)
-choices status = endTurn :| act
+extract :: Ord k => Map k Int -> [(k, Map k Int)]
+extract m = do
+    key <- Map.keys m
+
+    return (key, decrement key m)
+
+subsetsByEnergy :: Int -> Map Card Int -> NonEmpty (Map Card Int, Int)
+subsetsByEnergy remainingEnergy₀ hand₀ =
+    loop (Map.toList hand₀) remainingEnergy₀ Map.empty
   where
+    loop ((card, count) : cardCounts) remainingEnergy subset =
+        case cost card of
+            Just c -> do
+                let maxN = min (remainingEnergy `div` c) count
+
+                n <- 0 :| [1..maxN]
+
+                let energyCost = n * c
+
+                loop cardCounts (remainingEnergy - energyCost) (add n card subset)
+            _ ->
+                loop cardCounts remainingEnergy subset
+
+    loop [] remainingEnergy subset = do
+        return (subset, remainingEnergy)
+
+choosing :: [Int] -> Int
+choosing ns = factorial (sum ns) `div` product (map factorial ns)
+  where
+    factorial :: Int -> Int
+    factorial n = product [1..n]
+
+subsetsOf
+    :: Ord k => Int -> Map k Int -> Maybe (Distribution (Map k Int, Map k Int))
+subsetsOf remaining₀ pool
+    | size₀ < remaining₀ = Nothing
+    | otherwise = Just Distribution{..}
+  where
+    possibilities = loop size₀ (Map.toList pool) remaining₀ Map.empty Map.empty
+
+    size₀ = sum (Map.elems pool)
+
+    toPossible subset unselected = Possible{..}
+      where
+        weigh (key, count) = choosing [ count, pool ! key - count ]
+
+        weight = product (map weigh (Map.toList subset))
+
+        outcome = (subset, unselected)
+
+    loop size keyCounts remaining selected unselected
+        | size <= remaining = do
+            let finalSubset =
+                    Map.unionWith (+) (Map.fromList keyCounts) selected
+
+            return (toPossible finalSubset unselected)
+
+        | remaining <= 0 = do
+            return (toPossible selected unselected)
+    -- In theory we should never hit this case, but just for totality…
+    loop _ [] _ selected unselected = do
+        return (toPossible selected unselected)
+    loop size ((key, count) : keyCounts) remaining selected unselected = do
+        let newSize = size - count
+
+        let minN = max 0 (remaining - newSize)
+
+        let maxN = min count remaining
+
+        n <- NonEmpty.fromList [minN..maxN]
+
+        loop newSize keyCounts (remaining - n) (add n key selected) (add (count - n) key unselected)
+
+cost :: Card -> Maybe Int
+cost card = case card of
+    Strike         -> Just 1
+    Defend         -> Just 1
+    Bash           -> Just 2
+    Ascender'sBane -> Nothing
+
+exampleChoices :: Status -> NonEmpty (Distribution Status)
+exampleChoices status₀ = do
+    let heuristic subsets =
+            case NonEmpty.nonEmpty filtered of
+                Nothing -> subsets
+                Just x  -> x
+          where
+            filtered = do
+                (subset, remainingEnergy) <- NonEmpty.toList subsets
+
+                Monad.guard (remainingEnergy <= 1)
+
+                return (subset, remainingEnergy)
+
+    (subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
+
+    let turn = do
+            -- TODO: Not accurate to model energy in this way in general
+            --
+            -- For example, this won't correctly handle turns that generate
+            -- energy (e.g. Double Energy or exiting from Calm)
+            State.modify (\status -> status{ energy = remainingEnergy })
+
+            -- TODO: The order in which cards are played matters
+            let process card count = do
+                    Monad.replicateM_ count (act card)
+
+            _ <- Map.traverseWithKey process subset
+
+            endTurn
+
+    return (State.execStateT turn status₀)
+  where
+    endTurn :: StateT Status Distribution ()
     endTurn = do
+        status <- State.get
+
         let newCultistVulnerability =
                 if 1 <= cultistVulnerability status
                 then cultistVulnerability status - 1
@@ -214,14 +355,16 @@ choices status = endTurn :| act
                 then ironcladHealth status - cultistUnblockedDamage
                 else 0
 
+        let exhaustedHand = Map.delete Ascender'sBane (hand status)
+
         let discardedHand = status
-                { hand = []
-                , graveyard = Map.unionWith (+) (hand status) (graveyard status)
+                { hand = Map.empty
+                , graveyard = Map.unionWith (+) exhaustedHand (graveyard status)
                 }
 
-        drawnCards <- drawMany handSize discardedHand
+        drawnCards <- lift (drawMany handSize discardedHand)
 
-        return drawnCards
+        State.put drawnCards
             { cultistVulnerability = newCultistVulnerability
             , ironcladHealth = newIroncladHealth
             , ironcladBlock = 0
@@ -229,14 +372,9 @@ choices status = endTurn :| act
             , turn = turn status + 1
             }
 
-    act = do
-        (card, count) <- Map.toList (hand status)
-
-        let cost = case card of
-                Strike         -> 1
-                Defend         -> 1
-                Bash           -> 2
-                Ascender'sBane -> 0
+    act :: Card -> StateT Status Distribution ()
+    act card = do
+        status <- State.get
 
         let vulnerability = case card of
                 Strike         -> 0
@@ -244,7 +382,8 @@ choices status = endTurn :| act
                 Bash           -> 2
                 Ascender'sBane -> 0
 
-        let damageMultiplier = if 1 <= cultistVulnerability status then 1.5 else 1
+        let damageMultiplier =
+                if 1 <= cultistVulnerability status then 1.5 else 1
 
         let baseDamage = case card of
                 Strike         -> 6
@@ -252,7 +391,7 @@ choices status = endTurn :| act
                 Bash           -> 8
                 Ascender'sBane -> 0
 
-        let damage = truncate (baseDamage * damageMultiplier)
+        let damage = truncate (baseDamage * damageMultiplier :: Double)
 
         let block = case card of
                 Strike         -> 0
@@ -264,14 +403,6 @@ choices status = endTurn :| act
                 if damage <= cultistHealth status
                 then cultistHealth status - damage
                 else 0
-
-        let permitted =
-                    card /= Ascender'sBane
-                &&  cost <= energy status
-                &&  not (card == Defend && cultistDamage <= ironcladBlock status)
-              where
-                cultistDamage =
-                    if turn status == 0 then 0 else 1 + 5 * turn status
 
         let newStatus =
                 status
@@ -285,27 +416,23 @@ choices status = endTurn :| act
                         cultistVulnerability status + vulnerability
                     , ironcladBlock =
                         ironcladBlock status + block
-                    , energy =
-                        energy status - cost
                     }
 
-        if permitted 
-            then return (return newStatus)
-            else empty
+        State.put newStatus
 
 main :: IO ()
 main = do
-    Pretty.pPrint game
+    Pretty.pPrint (NonEmpty.toList (possibilities game))
 
-    Pretty.pPrint (expectationValue (fmap (fromIntegral . ironcladHealth) game))
+    Pretty.pPrint (expectationValue @Double (fmap (fromIntegral . ironcladHealth) game))
 
 game :: Distribution Status
 game = prune do
     let objective = fromIntegral . ironcladHealth
 
     let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
-                    || 3 <= turn status
+                    || 5 <= turn status
 
     initialStatus <- possibleInitialStatuses
 
-    play objective done choices initialStatus
+    play @Double objective done exampleChoices initialStatus
