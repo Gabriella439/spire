@@ -1,5 +1,4 @@
 {-# LANGUAGE ApplicativeDo      #-}
-{-# LANGUAGE BangPatterns       #-}
 {-# LANGUAGE BlockArguments     #-}
 {-# LANGUAGE DeriveFunctor      #-}
 {-# LANGUAGE DeriveGeneric      #-}
