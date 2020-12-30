@@ -18,20 +18,6 @@ import qualified Data.Map.Strict    as Map
 import qualified Data.Ord           as Ord
 import qualified Text.Show.Pretty   as Pretty
 
-data Card = Strike | Defend | Ascender'sBane | Bash deriving (Eq, Ord, Show)
-
-data Status = Status
-    { cultistHealth        :: !Int
-    , ironcladHealth       :: !Int
-    , deck                 :: !(Map Card Int)
-    , hand                 :: !(Map Card Int)
-    , graveyard            :: !(Map Card Int)
-    , cultistVulnerability :: !Int
-    , ironcladBlock        :: !Int
-    , energy               :: !Int
-    , turn                 :: !Int
-    } deriving (Eq, Ord, Show)
-
 data Possible a = Possible { weight :: !Int, outcome :: !a }
     deriving (Functor, Show)
 
@@ -45,17 +31,18 @@ instance Applicative Distribution where
 
 instance Monad Distribution where
     m >>= f = Distribution do
-        Possible p₀ x <- possibilities m
+        Possible w₀ x <- possibilities m
 
-        Possible p₁ y <- possibilities (f x)
+        Possible w₁ y <- possibilities (f x)
 
-        return $! Possible (p₀ * p₁) y
+        return $! Possible (w₀ * w₁) y
 
 expectationValue :: Fractional n => Distribution n -> n
 expectationValue distribution =
     sum (fmap tally (possibilities distribution)) / totalWeight
   where
-    totalWeight = sum (fmap (fromIntegral . weight) (possibilities distribution))
+    totalWeight =
+        sum (fmap (fromIntegral . weight) (possibilities distribution))
 
     tally possible = fromIntegral (weight possible) * outcome possible
 
@@ -66,22 +53,32 @@ play
     -> (status -> NonEmpty (Distribution status))
     -> status
     -> Distribution status
-play objectiveFunction done choices = loop
+play objective done choices = loop
   where
     loop status
         | done status = do
             pure status
         | otherwise = do
-            let predict option = expectationValue do
-                    nextStatus <- option
-
-                    finalStatus <- loop nextStatus
-
-                    return (objectiveFunction finalStatus)
-
-            nextStatus <- List.maximumBy (Ord.comparing predict) (choices status)
+            nextStatus <- pick objective done choices status
 
             loop nextStatus
+
+pick
+    :: (Fractional n, Ord n)
+    => (status -> n)
+    -> (status -> Bool)
+    -> (status -> NonEmpty (Distribution status))
+    -> status
+    -> Distribution status
+pick objective done choices status =
+    List.maximumBy (Ord.comparing predict) (choices status)
+  where
+    predict option = expectationValue do
+        nextStatus <- option
+
+        finalStatus <- play objective done choices nextStatus
+
+        return (objective finalStatus)
 
 prune :: Ord key => Distribution key -> Distribution key
 prune = mapToDistribution . distributionToMap
@@ -92,9 +89,23 @@ prune = mapToDistribution . distributionToMap
         return (outcome possible, weight possible)
 
     mapToDistribution m = Distribution do
-        (key, value) <- NonEmpty.fromList (Map.toList m)
+        (outcome, weight) <- NonEmpty.fromList (Map.toList m)
 
-        return Possible{ weight = value, outcome = key }
+        return Possible{..}
+
+data Card = Strike | Defend | Ascender'sBane | Bash deriving (Eq, Ord, Show)
+
+data Status = Status
+    { cultistHealth        :: !Int
+    , ironcladHealth       :: !Int
+    , deck                 :: !(Map Card Int)
+    , hand                 :: !(Map Card Int)
+    , graveyard            :: !(Map Card Int)
+    , cultistVulnerability :: !Int
+    , ironcladBlock        :: !Int
+    , energy               :: !Int
+    , turn                 :: !Int
+    } deriving (Eq, Ord, Show)
 
 draw :: Status -> Distribution Status
 draw status = prune do
@@ -290,11 +301,11 @@ main = do
 
 game :: Distribution Status
 game = prune do
-    let objectiveFunction = fromIntegral . ironcladHealth
+    let objective = fromIntegral . ironcladHealth
 
     let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
                     || 3 <= turn status
 
     initialStatus <- possibleInitialStatuses
 
-    play objectiveFunction done choices initialStatus
+    play objective done choices initialStatus
