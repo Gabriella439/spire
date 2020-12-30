@@ -135,16 +135,12 @@ instance (HasTrie k, HasTrie v, Ord k) => HasTrie (Map k v) where
     newtype (Map k v :->: b) = MapTrie { unMapTrie :: Reg [(k, v)] :->: b }
 
     trie f = MapTrie (trie (f . Map.fromAscList . Generics.to))
-      -- f :: (Map k v -> b) -> (Map k v :-> b)
-      --
-      -- MapTrie :: (Reg [(k, v)]
-      --
-      -- MemoTrie.trieGeneric MapTrie
 
     untrie t a = untrie (unMapTrie t) (Generics.from (Map.toList a))
 
-    enumerate t =
-      [ (Map.fromAscList (Generics.to a), b) | (a, b) <- enumerate (unMapTrie t) ]
+    enumerate t = map adapt (enumerate (unMapTrie t))
+      where
+        adapt (a, b) = (Map.fromAscList (Generics.to a), b)
 
 drawMany :: Int -> StateT Status Distribution ()
 drawMany n = do
@@ -421,7 +417,6 @@ game = prune do
     let objective = fromIntegral . ironcladHealth
 
     let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
-                    -- || 6 <= turn status
 
     initialStatus <- possibleInitialStatuses
 
