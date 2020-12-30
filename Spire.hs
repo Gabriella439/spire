@@ -112,66 +112,42 @@ data Status = Status
     , turn                 :: !Int
     } deriving (Eq, Ord, Show)
 
-draw :: Status -> Distribution Status
-draw status = prune do
-    case select (deck status) of
-        Nothing -> do
-            case select (graveyard status) of
-                Nothing -> do
-                    error "Oops!"
-                Just distribution -> do
-                    (card, newDeck) <- distribution
+drawMany :: Int -> StateT Status Distribution ()
+drawMany n = do
+    status <- State.get
 
-                    return status
-                        { deck = newDeck
-                        , hand = increment card (hand status)
-                        , graveyard = Map.empty
-                        }
-        Just distribution -> do
-            (card, newDeck) <- distribution
-
-            return status
-                { deck = newDeck
-                , hand = increment card (hand status)
-                }
-
-drawMany :: Int -> Status -> Distribution Status
-drawMany n status =
     case subsetsOf n (deck status) of
         Nothing -> do
             -- We ran out of cards, so draw out the entire deck and shuffle
             -- in the graveyard so that we can draw the remaining cards
             let drawnCards = deck status
 
-            let shuffledStatus = status
-                    { graveyard = Map.empty
-                    , hand = Map.unionWith (+) drawnCards (hand status)
-                    , deck = graveyard status
-                    }
+            State.put status
+                { graveyard = Map.empty
+                , hand = Map.unionWith (+) drawnCards (hand status)
+                , deck = graveyard status
+                }
 
-            drawMany (n - sum (Map.elems drawnCards)) shuffledStatus
+            drawMany (n - sum (Map.elems drawnCards))
 
         Just distribution -> do
-            (drawnCards, newDeck) <- distribution
+            (drawnCards, newDeck) <- lift distribution
 
-            return status
+            State.put status
                 { deck = newDeck
                 , hand = Map.unionWith (+) drawnCards (hand status)
                 }
             
-handSize :: Int
-handSize = 5
-
 possibleInitialStatuses :: Distribution Status
 possibleInitialStatuses = do
     status <- Distribution do
-        let deck = Map.fromList [ (Strike, 3), (Defend, 3) ]
+        let deck = Map.fromList [ (Strike, 5), (Defend, 4), (Bash, 1), (Ascender'sBane, 1) ]
 
-        let hand = Map.fromList [ (Strike, 2), (Bash, 1), (Ascender'sBane, 1), (Defend, 1) ]
+        let hand = Map.empty
 
         let graveyard = Map.empty
 
-        cultistHealth <- pure 50 -- [ 50 .. 56 ]
+        cultistHealth <- pure 50 -- 50 :| [ 51 .. 56 ]
 
         let cultistVulnerability = 0
 
@@ -189,20 +165,7 @@ possibleInitialStatuses = do
 
         return Possible{..}
 
-    return status
-
-select :: Ord k => Map k Int -> Maybe (Distribution (k, Map k Int))
-select oldMap = do
-    keyCounts <- NonEmpty.nonEmpty (Map.toList oldMap)
-
-    return Distribution
-        { possibilities = do
-            (key, count) <- keyCounts
-
-            let newMap = decrement key oldMap
-
-            return (Possible { weight = count, outcome = (key, newMap) })
-        }
+    State.execStateT (drawMany 5) status
 
 subtract :: Ord k => Int -> k -> Map k Int -> Map k Int
 subtract n = Map.update f
@@ -219,12 +182,6 @@ add n k = Map.insertWith (+) k n
 
 increment :: Ord k => k -> Map k Int -> Map k Int
 increment = add 1
-
-extract :: Ord k => Map k Int -> [(k, Map k Int)]
-extract m = do
-    key <- Map.keys m
-
-    return (key, decrement key m)
 
 subsetsByEnergy :: Int -> Map Card Int -> NonEmpty (Map Card Int, Int)
 subsetsByEnergy remainingEnergy₀ hand₀ =
@@ -246,11 +203,10 @@ subsetsByEnergy remainingEnergy₀ hand₀ =
     loop [] remainingEnergy subset = do
         return (subset, remainingEnergy)
 
-choosing :: [Int] -> Int
-choosing ns = factorial (sum ns) `div` product (map factorial ns)
+choose :: Int -> Int -> Int
+n `choose` k = factorial n `div` (factorial k * factorial (n - k))
   where
-    factorial :: Int -> Int
-    factorial n = product [1..n]
+    factorial m = product [1..m]
 
 subsetsOf
     :: Ord k => Int -> Map k Int -> Maybe (Distribution (Map k Int, Map k Int))
@@ -264,7 +220,7 @@ subsetsOf remaining₀ pool
 
     toPossible subset unselected = Possible{..}
       where
-        weigh (key, count) = choosing [ count, pool ! key - count ]
+        weigh (key, count) = (pool ! key) `choose` count
 
         weight = product (map weigh (Map.toList subset))
 
@@ -272,13 +228,15 @@ subsetsOf remaining₀ pool
 
     loop size keyCounts remaining selected unselected
         | size <= remaining = do
-            let finalSubset =
+            let finalSelected =
                     Map.unionWith (+) (Map.fromList keyCounts) selected
 
-            return (toPossible finalSubset unselected)
+            return (toPossible finalSelected unselected)
 
         | remaining <= 0 = do
-            return (toPossible selected unselected)
+            let finalUnselected =
+                    Map.unionWith (+) (Map.fromList keyCounts) unselected
+            return (toPossible selected finalUnselected)
     -- In theory we should never hit this case, but just for totality…
     loop _ [] _ selected unselected = do
         return (toPossible selected unselected)
@@ -310,7 +268,7 @@ exampleChoices status₀ = do
             filtered = do
                 (subset, remainingEnergy) <- NonEmpty.toList subsets
 
-                Monad.guard (remainingEnergy <= 1)
+                Monad.guard (remainingEnergy <= 0)
 
                 return (subset, remainingEnergy)
 
@@ -331,6 +289,8 @@ exampleChoices status₀ = do
 
             endTurn
 
+            beginTurn
+
     return (State.execStateT turn status₀)
   where
     endTurn :: StateT Status Distribution ()
@@ -343,10 +303,12 @@ exampleChoices status₀ = do
                 else 0
 
         let cultistDamage =
-                if turn status == 0 then 0 else 1 + 5 * turn status
+                if turn status == 0
+                then 0
+                else 1 + 5 * turn status
 
         let cultistUnblockedDamage =
-                if ironcladBlock status <= cultistDamage
+                if 0 < cultistHealth status && ironcladBlock status <= cultistDamage
                 then cultistDamage - ironcladBlock status
                 else 0
 
@@ -357,20 +319,22 @@ exampleChoices status₀ = do
 
         let exhaustedHand = Map.delete Ascender'sBane (hand status)
 
-        let discardedHand = status
-                { hand = Map.empty
-                , graveyard = Map.unionWith (+) exhaustedHand (graveyard status)
-                }
-
-        drawnCards <- lift (drawMany handSize discardedHand)
-
-        State.put drawnCards
-            { cultistVulnerability = newCultistVulnerability
+        State.put status
+            { hand = Map.empty
+            , graveyard = Map.unionWith (+) exhaustedHand (graveyard status)
             , ironcladHealth = newIroncladHealth
-            , ironcladBlock = 0
+            , cultistVulnerability = newCultistVulnerability
+            }
+
+    beginTurn :: StateT Status Distribution ()
+    beginTurn = do
+        drawMany 5
+
+        State.modify (\status -> status
+            { ironcladBlock = 0
             , energy = 3
             , turn = turn status + 1
-            }
+            })
 
     act :: Card -> StateT Status Distribution ()
     act card = do
@@ -404,21 +368,13 @@ exampleChoices status₀ = do
                 then cultistHealth status - damage
                 else 0
 
-        let newStatus =
-                status
-                    { hand =
-                        decrement card (hand status)
-                    , graveyard =
-                        increment card (graveyard status)
-                    , cultistHealth =
-                        newCultistHealth
-                    , cultistVulnerability =
-                        cultistVulnerability status + vulnerability
-                    , ironcladBlock =
-                        ironcladBlock status + block
-                    }
-
-        State.put newStatus
+        State.put status
+            { hand                 = decrement card (hand status)
+            , graveyard            = increment card (graveyard status)
+            , cultistHealth        = newCultistHealth
+            , cultistVulnerability = cultistVulnerability status + vulnerability
+            , ironcladBlock        = ironcladBlock status + block
+            }
 
 main :: IO ()
 main = do
@@ -431,7 +387,7 @@ game = prune do
     let objective = fromIntegral . ironcladHealth
 
     let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
-                    || 5 <= turn status
+                    || 6 <= turn status
 
     initialStatus <- possibleInitialStatuses
 
