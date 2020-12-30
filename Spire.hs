@@ -84,7 +84,7 @@ play objective done choices = MemoTrie.memoFix memoized
 
             return (objective finalStatus)
 
-prune :: Ord key => Distribution key -> Distribution key
+prune :: Ord status => Distribution status -> Distribution status
 prune = mapToDistribution . distributionToMap
   where
     distributionToMap distribution = Map.fromListWith (+) do
