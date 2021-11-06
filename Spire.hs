@@ -2,6 +2,7 @@
 {-# LANGUAGE BlockArguments     #-}
 {-# LANGUAGE DeriveFunctor      #-}
 {-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE DerivingVia        #-}
 {-# LANGUAGE ExplicitNamespaces #-}
 {-# LANGUAGE NamedFieldPuns     #-}
 {-# LANGUAGE TypeFamilies       #-}
@@ -97,6 +98,22 @@ play objective done choices = MemoTrie.memoFix memoized
             finalStatus <- loop nextStatus
 
             return (objective finalStatus)
+
+-- | Prune a `Distribution` by consolidating duplicate outcomes
+prune :: Ord status => Distribution status -> Distribution status
+prune = mapToDistribution . distributionToMap
+  where
+    distributionToMap :: Ord status => Distribution status -> Map status Int
+    distributionToMap Distribution{ possibilities } = Map.fromListWith (+) do
+        ~Possibility{ outcome, weight } <- NonEmpty.toList possibilities
+
+        return (outcome, weight)
+
+    mapToDistribution :: Map status Int -> Distribution status
+    mapToDistribution m = Distribution do
+        ~(outcome, weight) <- NonEmpty.fromList (Map.toList m)
+
+        return Possibility{ weight, outcome }
 
 -- | Ironclad cards
 data Card = Bash | Strike | Defend | Ascender'sBane
@@ -308,21 +325,22 @@ exampleChoices status₀ = do
               where
                 predicate (_, remainingEnergy) = remainingEnergy <= 0
 
-    (subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
+    ~(subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
 
-    let turn = do
-            State.modify (\status -> status{ energy = remainingEnergy })
+    return do
+        let turn = do
+                State.modify (\status -> status{ energy = remainingEnergy })
 
-            let process card count = do
-                    Monad.replicateM_ count (act card)
+                let process card count = do
+                        Monad.replicateM_ count (act card)
 
-            _ <- Map.traverseWithKey process subset
+                _ <- Map.traverseWithKey process subset
 
-            endTurn
+                endTurn
 
-            beginTurn
+                beginTurn
 
-    return (State.execStateT turn status₀)
+        State.execStateT turn status₀
   where
     endTurn :: StateT Status Distribution ()
     endTurn = do
@@ -406,21 +424,6 @@ exampleChoices status₀ = do
             , cultistVulnerability = cultistVulnerability status + vulnerability
             , ironcladBlock        = ironcladBlock status + block
             }
-
-prune :: Ord status => Distribution status -> Distribution status
-prune = mapToDistribution . distributionToMap
-  where
-    distributionToMap :: Ord status => Distribution status -> Map status Int
-    distributionToMap Distribution{ possibilities } = Map.fromListWith (+) do
-        Possibility{ outcome, weight } <- NonEmpty.toList possibilities
-
-        return (outcome, weight)
-
-    mapToDistribution :: Map status Int -> Distribution status
-    mapToDistribution m = Distribution do
-        (outcome, weight) <- NonEmpty.fromList (Map.toList m)
-
-        return Possibility{ weight, outcome }
 
 game :: Distribution Status
 game = prune do
