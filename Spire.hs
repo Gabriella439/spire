@@ -102,6 +102,15 @@ play objective done choices = MemoTrie.memoFix memoized
 data Card = Bash | Strike | Defend | Ascender'sBane
     deriving (Eq, Generic, Ord, Show)
 
+instance HasTrie Card where
+    newtype (Card :->: b) = CardTrie { unCardTrie :: Reg Card :->: b }
+
+    trie = MemoTrie.trieGeneric CardTrie
+
+    untrie = MemoTrie.untrieGeneric unCardTrie
+
+    enumerate = MemoTrie.enumerateGeneric unCardTrie
+
 -- | Game state
 data Status = Status
     { cultistHealth        :: !Int
@@ -123,15 +132,6 @@ instance HasTrie Status where
     untrie = MemoTrie.untrieGeneric unStatusTrie
 
     enumerate = MemoTrie.enumerateGeneric unStatusTrie
-
-instance HasTrie Card where
-    newtype (Card :->: b) = CardTrie { unCardTrie :: Reg Card :->: b }
-
-    trie = MemoTrie.trieGeneric CardTrie
-
-    untrie = MemoTrie.untrieGeneric unCardTrie
-
-    enumerate = MemoTrie.enumerateGeneric unCardTrie
 
 instance (HasTrie k, HasTrie v, Ord k) => HasTrie (Map k v) where
     newtype (Map k v :->: b) = MapTrie { unMapTrie :: Reg [(k, v)] :->: b }
@@ -177,6 +177,7 @@ subsetsOf remaining₀ pool
         | remaining <= 0 = do
             let finalUnselected =
                     Map.unionWith (+) (Map.fromList keyCounts) unselected
+
             return (toPossibility selected finalUnselected)
 
     -- In theory we should never hit this case, but we include this to satisfy
@@ -303,12 +304,9 @@ exampleChoices status₀ = do
                 Nothing -> subsets
                 Just x  -> x
           where
-            filtered = do
-                (subset, remainingEnergy) <- NonEmpty.toList subsets
-
-                Monad.guard (remainingEnergy <= 0)
-
-                return (subset, remainingEnergy)
+            filtered = filter predicate (NonEmpty.toList subsets)
+              where
+                predicate (_, remainingEnergy) = remainingEnergy <= 0
 
     (subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
 
