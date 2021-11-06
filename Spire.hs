@@ -3,12 +3,11 @@
 {-# LANGUAGE DeriveFunctor      #-}
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE ExplicitNamespaces #-}
-{-# LANGUAGE RecordWildCards    #-}
-{-# LANGUAGE TypeApplications   #-}
+{-# LANGUAGE NamedFieldPuns     #-}
 {-# LANGUAGE TypeFamilies       #-}
 {-# LANGUAGE TypeOperators      #-}
 
-{-# OPTIONS_GHC -Wall -Wno-orphans #-}
+{-# OPTIONS_GHC -Wall -Wno-orphans -Wno-type-defaults #-}
 
 module Main where
 
@@ -30,76 +29,80 @@ import qualified Data.Ord                   as Ord
 import qualified GHC.Generics               as Generics
 import qualified Text.Show.Pretty           as Pretty
 
-data Possible a = Possible { weight :: !Int, outcome :: !a }
+{-| A single possibility, consisting of an outcome paired with the associated
+    weight of that outcome
+-}
+data Possibility a
+    = Possibility { outcome :: !a, weight :: !Int }
     deriving (Functor, Show)
 
-newtype Distribution a = Distribution { possibilities :: NonEmpty (Possible a) }
+-- | A probability distribution, which is a non-empty list of weighted outcomes
+newtype Distribution a
+    = Distribution { possibilities :: NonEmpty (Possibility a) }
     deriving (Functor, Show)
 
 instance Applicative Distribution where
-    pure x = Distribution (pure (Possible 1 x))
+    pure x = Distribution (pure (Possibility x 1))
 
     (<*>) = Monad.ap
 
 instance Monad Distribution where
     m >>= f = Distribution do
-        Possible w₀ x <- possibilities m
+        Possibility x weight0 <- possibilities m
 
-        Possible w₁ y <- possibilities (f x)
+        Possibility y weight1 <- possibilities (f x)
 
-        return $! Possible (w₀ * w₁) y
+        return $! Possibility y (weight0 * weight1)
 
-expectationValue :: Fractional n => Distribution n -> n
-expectationValue distribution =
-    sum (fmap tally (possibilities distribution)) / totalWeight
+-- | Compute the expected value for a probability distribution
+expectedValue :: Fractional n => Distribution n -> n
+expectedValue Distribution{ possibilities } =
+    totalTally / fromIntegral totalWeight
   where
-    totalWeight =
-        sum (fmap (fromIntegral . weight) (possibilities distribution))
+    totalTally = sum (fmap tally possibilities)
 
-    tally possible = fromIntegral (weight possible) * outcome possible
+    totalWeight = sum (fmap weight possibilities)
 
+    tally Possibility{ outcome, weight } = fromIntegral weight * outcome
+
+{-| Play the game optimally to its conclusion, always selecting the move that
+    leads to the highest expected value for the given objective function
+-}
 play
-    :: (Fractional n, Ord n, HasTrie status)
-    => (status -> n)
-    -> (status -> Bool)
-    -> (status -> NonEmpty (Distribution status))
-    -> status
-    -> Distribution status
+    :: (Fractional n, Ord n, HasTrie state)
+    => (state -> n)
+    -- ^ Objective function, which returns the value we are trying to maximize
+    -> (state -> Bool)
+    -- ^ Termination function, which returns True if the game is over
+    -> (state -> NonEmpty (Distribution state))
+    -- ^ A function which generates the available moves from the current state
+    -> state
+    -- ^ The starting state
+    -> Distribution state
+    -- ^ The final probability distribution at the end of the game after optimal
+    --   play
 play objective done choices = MemoTrie.memoFix memoized
   where
     memoized loop status
         | done status = do
             pure status
         | otherwise = do
-            nextStatus <- pick status
+            next <- List.maximumBy (Ord.comparing predict) (choices status)
 
-            loop nextStatus
+            loop next
       where
-        pick status_ = List.maximumBy (Ord.comparing predict) (choices status_)
-
-        predict option = expectationValue do
-            nextStatus <- option
+        predict choice = expectedValue do
+            nextStatus <- choice
 
             finalStatus <- loop nextStatus
 
             return (objective finalStatus)
 
-prune :: Ord status => Distribution status -> Distribution status
-prune = mapToDistribution . distributionToMap
-  where
-    distributionToMap distribution = Map.fromListWith (+) do
-        possible <- NonEmpty.toList (possibilities distribution)
-
-        return (outcome possible, weight possible)
-
-    mapToDistribution m = Distribution do
-        (outcome, weight) <- NonEmpty.fromList (Map.toList m)
-
-        return Possible{..}
-
+-- | Ironclad cards
 data Card = Bash | Strike | Defend | Ascender'sBane
     deriving (Eq, Generic, Ord, Show)
 
+-- | Game state
 data Status = Status
     { cultistHealth        :: !Int
     , ironcladHealth       :: !Int
@@ -141,6 +144,58 @@ instance (HasTrie k, HasTrie v, Ord k) => HasTrie (Map k v) where
       where
         adapt (a, b) = (Map.fromAscList (Generics.to a), b)
 
+choose :: Int -> Int -> Int
+n `choose` k = factorial n `div` (factorial k * factorial (n - k))
+  where
+    factorial m = product [ 1 .. m ]
+
+subsetsOf
+    :: Ord k => Int -> Map k Int -> Maybe (Distribution (Map k Int, Map k Int))
+subsetsOf remaining₀ pool
+    | size₀ < remaining₀ = Nothing
+    | otherwise = Just Distribution{ possibilities }
+  where
+    possibilities = loop size₀ (Map.toList pool) remaining₀ Map.empty Map.empty
+
+    size₀ = sum (Map.elems pool)
+
+    toPossibility subset unselected = Possibility{ weight, outcome }
+      where
+        weigh (key, count) = (pool ! key) `choose` count
+
+        weight = product (map weigh (Map.toList subset))
+
+        outcome = (subset, unselected)
+
+    loop size keyCounts remaining selected unselected
+        | size <= remaining = do
+            let finalSelected =
+                    Map.unionWith (+) (Map.fromList keyCounts) selected
+
+            return (toPossibility finalSelected unselected)
+
+        | remaining <= 0 = do
+            let finalUnselected =
+                    Map.unionWith (+) (Map.fromList keyCounts) unselected
+            return (toPossibility selected finalUnselected)
+
+    -- In theory we should never hit this case, but we include this to satisfy
+    -- the exhaustivity checker
+    loop _ [] _ selected unselected = do
+        return (toPossibility selected unselected)
+
+    loop size ((key, count) : keyCounts) remaining selected unselected = do
+        let newSize = size - count
+
+        let minN = max 0 (remaining - newSize)
+
+        let maxN = min count remaining
+
+        n <- NonEmpty.fromList [ minN .. maxN ]
+
+        loop newSize keyCounts (remaining - n) (add n key selected) (add (count - n) key unselected)
+
+-- | Draw N cards (efficiently)
 drawMany :: Int -> StateT Status Distribution ()
 drawMany n = do
     status <- State.get
@@ -166,33 +221,35 @@ drawMany n = do
                 { deck = newDeck
                 , hand = Map.unionWith (+) drawnCards (hand status)
                 }
-            
+
+-- | All possible starting states
 possibleInitialStatuses :: Distribution Status
 possibleInitialStatuses = do
     status <- Distribution do
-        let deck = Map.fromList [ (Strike, 5), (Defend, 4), (Bash, 1), (Ascender'sBane, 1) ]
-
-        let hand = Map.empty
-
-        let graveyard = Map.empty
-
         cultistHealth <- 50 :| [ 51 .. 56 ]
 
-        let cultistVulnerability = 0
-
-        let ironcladHealth = 80
-
-        let ironcladBlock = 0
-
-        let energy = 3
-
-        let turn = 0
-
-        let outcome = Status{..}
-
-        let weight = 1
-
-        return Possible{..}
+        return
+          Possibility
+            { weight = 1
+            , outcome =
+                Status
+                  { cultistHealth
+                  , ironcladHealth = 80
+                  , deck =
+                      Map.fromList
+                        [ (Strike, 5)
+                        , (Defend, 4)
+                        , (Bash, 1)
+                        , (Ascender'sBane, 1)
+                        ]
+                  , hand = Map.empty
+                  , graveyard = Map.empty
+                  , cultistVulnerability = 0
+                  , ironcladBlock = 0
+                  , energy = 3
+                  , turn = 0
+                  }
+            }
 
     State.execStateT (drawMany 5) status
 
@@ -221,7 +278,7 @@ subsetsByEnergy remainingEnergy₀ hand₀ =
             Just c -> do
                 let maxN = min (remainingEnergy `div` c) count
 
-                n <- 0 :| [1..maxN]
+                n <- 0 :| [ 1 .. maxN ]
 
                 let energyCost = n * c
 
@@ -231,54 +288,6 @@ subsetsByEnergy remainingEnergy₀ hand₀ =
 
     loop [] remainingEnergy subset = do
         return (subset, remainingEnergy)
-
-choose :: Int -> Int -> Int
-n `choose` k = factorial n `div` (factorial k * factorial (n - k))
-  where
-    factorial m = product [1..m]
-
-subsetsOf
-    :: Ord k => Int -> Map k Int -> Maybe (Distribution (Map k Int, Map k Int))
-subsetsOf remaining₀ pool
-    | size₀ < remaining₀ = Nothing
-    | otherwise = Just Distribution{..}
-  where
-    possibilities = loop size₀ (Map.toList pool) remaining₀ Map.empty Map.empty
-
-    size₀ = sum (Map.elems pool)
-
-    toPossible subset unselected = Possible{..}
-      where
-        weigh (key, count) = (pool ! key) `choose` count
-
-        weight = product (map weigh (Map.toList subset))
-
-        outcome = (subset, unselected)
-
-    loop size keyCounts remaining selected unselected
-        | size <= remaining = do
-            let finalSelected =
-                    Map.unionWith (+) (Map.fromList keyCounts) selected
-
-            return (toPossible finalSelected unselected)
-
-        | remaining <= 0 = do
-            let finalUnselected =
-                    Map.unionWith (+) (Map.fromList keyCounts) unselected
-            return (toPossible selected finalUnselected)
-    -- In theory we should never hit this case, but just for totality…
-    loop _ [] _ selected unselected = do
-        return (toPossible selected unselected)
-    loop size ((key, count) : keyCounts) remaining selected unselected = do
-        let newSize = size - count
-
-        let minN = max 0 (remaining - newSize)
-
-        let maxN = min count remaining
-
-        n <- NonEmpty.fromList [minN..maxN]
-
-        loop newSize keyCounts (remaining - n) (add n key selected) (add (count - n) key unselected)
 
 cost :: Card -> Maybe Int
 cost card = case card of
@@ -304,13 +313,8 @@ exampleChoices status₀ = do
     (subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
 
     let turn = do
-            -- TODO: Not accurate to model energy in this way in general
-            --
-            -- For example, this won't correctly handle turns that generate
-            -- energy (e.g. Double Energy or exiting from Calm)
             State.modify (\status -> status{ energy = remainingEnergy })
 
-            -- TODO: The order in which cards are played matters
             let process card count = do
                     Monad.replicateM_ count (act card)
 
@@ -405,11 +409,20 @@ exampleChoices status₀ = do
             , ironcladBlock        = ironcladBlock status + block
             }
 
-main :: IO ()
-main = do
-    Pretty.pPrint (NonEmpty.toList (possibilities game))
+prune :: Ord status => Distribution status -> Distribution status
+prune = mapToDistribution . distributionToMap
+  where
+    distributionToMap :: Ord status => Distribution status -> Map status Int
+    distributionToMap Distribution{ possibilities } = Map.fromListWith (+) do
+        Possibility{ outcome, weight } <- NonEmpty.toList possibilities
 
-    Pretty.pPrint (expectationValue @Double (fmap (fromIntegral . ironcladHealth) game))
+        return (outcome, weight)
+
+    mapToDistribution :: Map status Int -> Distribution status
+    mapToDistribution m = Distribution do
+        (outcome, weight) <- NonEmpty.fromList (Map.toList m)
+
+        return Possibility{ weight, outcome }
 
 game :: Distribution Status
 game = prune do
@@ -419,4 +432,10 @@ game = prune do
 
     initialStatus <- possibleInitialStatuses
 
-    play @Double objective done exampleChoices initialStatus
+    play objective done exampleChoices initialStatus
+
+main :: IO ()
+main = do
+    Pretty.pPrint (NonEmpty.toList (possibilities game))
+
+    Pretty.pPrint (expectedValue (fmap (fromIntegral . ironcladHealth) game))
