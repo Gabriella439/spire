@@ -1,0 +1,15 @@
+cabal-version:      2.4
+name:               spire
+version:            1.0.0
+license:            BSD-3-Clause
+license-file:       LICENSE
+
+executable spire
+    main-is:          Spire.hs
+    build-depends:    base >=4.14.3.0 && < 5
+                    , MemoTrie
+                    , containers
+                    , mtl
+                    , pretty-show
+                    , transformers
+    default-language: Haskell2010
