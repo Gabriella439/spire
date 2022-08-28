@@ -340,25 +340,17 @@ exampleChoices status₀ = do
     endTurn = do
         status <- State.get
 
-        let newCultistVulnerability =
-                if 1 <= cultistVulnerability status
-                then cultistVulnerability status - 1
-                else 0
+        let newCultistVulnerability = max 0 (cultistVulnerability status - 1)
 
-        let cultistDamage =
-                if turn status == 0
-                then 0
-                else 1 + 5 * turn status
+        let cultistDamage = if turn status == 0 then 0 else 1 + 5 * turn status
 
         let cultistUnblockedDamage =
-                if 0 < cultistHealth status && ironcladBlock status <= cultistDamage
-                then cultistDamage - ironcladBlock status
+                if 0 < cultistHealth status
+                then max 0 (cultistDamage - ironcladBlock status)
                 else 0
 
         let newIroncladHealth =
-                if cultistUnblockedDamage <= ironcladHealth status
-                then ironcladHealth status - cultistUnblockedDamage
-                else 0
+                max 0 (ironcladHealth status - cultistUnblockedDamage)
 
         let exhaustedHand = Map.delete Ascender'sBane (hand status)
 
@@ -384,32 +376,24 @@ exampleChoices status₀ = do
         status <- State.get
 
         let vulnerability = case card of
-                Strike         -> 0
-                Defend         -> 0
-                Bash           -> 2
-                Ascender'sBane -> 0
+                Bash -> 2
+                _    -> 0
 
         let damageMultiplier =
                 if 1 <= cultistVulnerability status then 1.5 else 1
 
         let baseDamage = case card of
-                Strike         -> 6
-                Defend         -> 0
-                Bash           -> 8
-                Ascender'sBane -> 0
+                Strike -> 6
+                Bash   -> 8
+                _      -> 0
 
         let damage = truncate (baseDamage * damageMultiplier :: Double)
 
         let block = case card of
-                Strike         -> 0
-                Defend         -> 5
-                Bash           -> 0
-                Ascender'sBane -> 0
+                Defend -> 5
+                _      -> 0
 
-        let newCultistHealth =
-                if damage <= cultistHealth status
-                then cultistHealth status - damage
-                else 0
+        let newCultistHealth = max 0 (cultistHealth status - damage)
 
         State.put status
             { hand                 = decrease 1 card (hand status)
