@@ -18,7 +18,6 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map, (!))
 import Data.MemoTrie (HasTrie(..), Reg, type (:->:))
 import GHC.Generics (Generic)
-import Prelude hiding (subtract)
 
 import qualified Control.Monad              as Monad
 import qualified Control.Monad.State.Strict as State
@@ -211,7 +210,7 @@ subsetsOf remaining₀ pool
 
         n <- NonEmpty.fromList [ minN .. maxN ]
 
-        loop newSize keyCounts (remaining - n) (add n key selected) (add (count - n) key unselected)
+        loop newSize keyCounts (remaining - n) (increase n key selected) (increase (count - n) key unselected)
 
 -- | Draw N cards (efficiently)
 drawMany :: Int -> StateT Status Distribution ()
@@ -271,21 +270,16 @@ possibleInitialStatuses = do
 
     State.execStateT (drawMany 5) status
 
-subtract :: Ord k => Int -> k -> Map k Int -> Map k Int
-subtract n = Map.update f
+decrease :: Ord k => Int -> k -> Map k Int -> Map k Int
+decrease 0 _ = id
+decrease n k = Map.update f k
   where
     f v | v <= n    = Nothing
         | otherwise = Just (v - n)
 
-decrement :: Ord k => k -> Map k Int -> Map k Int
-decrement = subtract 1
-
-add :: Ord k => Int -> k -> Map k Int -> Map k Int
-add 0 _ = id
-add n k = Map.insertWith (+) k n
-
-increment :: Ord k => k -> Map k Int -> Map k Int
-increment = add 1
+increase :: Ord k => Int -> k -> Map k Int -> Map k Int
+increase 0 _ = id
+increase n k = Map.insertWith (+) k n
 
 subsetsByEnergy :: Int -> Map Card Int -> NonEmpty (Map Card Int, Int)
 subsetsByEnergy remainingEnergy₀ hand₀ =
@@ -300,7 +294,7 @@ subsetsByEnergy remainingEnergy₀ hand₀ =
 
                 let energyCost = n * c
 
-                loop cardCounts (remainingEnergy - energyCost) (add n card subset)
+                loop cardCounts (remainingEnergy - energyCost) (increase n card subset)
             _ ->
                 loop cardCounts remainingEnergy subset
 
@@ -418,8 +412,8 @@ exampleChoices status₀ = do
                 else 0
 
         State.put status
-            { hand                 = decrement card (hand status)
-            , graveyard            = increment card (graveyard status)
+            { hand                 = decrease 1 card (hand status)
+            , graveyard            = increase 1 card (graveyard status)
             , cultistHealth        = newCultistHealth
             , cultistVulnerability = cultistVulnerability status + vulnerability
             , ironcladBlock        = ironcladBlock status + block
