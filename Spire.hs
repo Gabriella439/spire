@@ -1,12 +1,15 @@
-{-# LANGUAGE ApplicativeDo      #-}
-{-# LANGUAGE BlockArguments     #-}
-{-# LANGUAGE DeriveFunctor      #-}
-{-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE DerivingVia        #-}
-{-# LANGUAGE ExplicitNamespaces #-}
-{-# LANGUAGE NamedFieldPuns     #-}
-{-# LANGUAGE TypeFamilies       #-}
-{-# LANGUAGE TypeOperators      #-}
+{-# LANGUAGE ApplicativeDo              #-}
+{-# LANGUAGE BlockArguments             #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveFunctor              #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE DerivingStrategies         #-}
+{-# LANGUAGE DerivingVia                #-}
+{-# LANGUAGE ExplicitNamespaces         #-}
+{-# LANGUAGE NamedFieldPuns             #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE UndecidableInstances       #-}
 
 {-# OPTIONS_GHC -Wall -Wno-orphans -Wno-type-defaults #-}
 
@@ -18,6 +21,7 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map, (!))
 import Data.MemoTrie (HasTrie(..), Reg, type (:->:))
 import GHC.Generics (Generic)
+import GHC.Exts (IsList)
 
 import qualified Control.Monad              as Monad
 import qualified Control.Monad.State.Strict as State
@@ -39,7 +43,11 @@ data Possibility a
 -- | A probability distribution, which is a non-empty list of weighted outcomes
 newtype Distribution a
     = Distribution { possibilities :: NonEmpty (Possibility a) }
-    deriving (Functor, Show)
+    deriving stock (Functor)
+    deriving newtype (IsList)
+
+instance Show a => Show (Distribution a) where
+    show distribution = show (NonEmpty.toList (possibilities distribution))
 
 instance Applicative Distribution where
     pure x = Distribution (pure (Possibility x 1))
