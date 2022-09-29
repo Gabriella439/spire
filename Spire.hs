@@ -73,38 +73,62 @@ expectedValue Distribution{ possibilities } =
 
     tally Possibility{ outcome, weight } = fromIntegral weight * outcome
 
-{-| Play the game optimally to its conclusion, always selecting the move that
-    leads to the highest expected value for the given objective function
--}
+-- | Play the game optimally to its conclusion
 play
     :: (Fractional n, Ord n, HasTrie state)
     => (state -> n)
-    -- ^ Objective function, which returns the value we are trying to maximize
-    -> (state -> Bool)
-    -- ^ Termination function, which returns True if the game is over
-    -> (state -> NonEmpty (Distribution state))
-    -- ^ A function which generates the available moves from the current state
+    -- ^ Objective function
+    -> (state -> [Distribution state])
+    -- ^ A function which generates the available moves
     -> state
     -- ^ The starting state
     -> Distribution state
-    -- ^ The final probability distribution at the end of the game after optimal
-    --   play
-play objective done choices = MemoTrie.memoFix memoized
+    -- ^ The final probability distribution
+play objectiveFunction toChoices = MemoTrie.memoFix memoized
   where
     memoized loop status
-        | done status = do
+        | null choices = do
             pure status
+
         | otherwise = do
-            next <- List.maximumBy (Ord.comparing predict) (choices status)
+            next <- List.maximumBy (Ord.comparing predict) choices
 
             loop next
       where
+        choices = toChoices status
+
         predict choice = expectedValue do
             nextStatus <- choice
 
             finalStatus <- loop nextStatus
 
-            return (objective finalStatus)
+            return (objectiveFunction finalStatus)
+
+-- | Play the game optimally for one step
+step
+    :: (Fractional n, Ord n, HasTrie state)
+    => (state -> n)
+    -- ^ Objective function
+    -> (state -> [Distribution state])
+    -- ^ A function which generates the available moves
+    -> state
+    -- ^ The starting state
+    -> Maybe (Distribution state)
+    -- ^ The final probability distribution
+step objectiveFunction toChoices status =
+    case choices of
+        []         -> Nothing
+        [ choice ] -> Just choice
+        _          -> Just (List.maximumBy (Ord.comparing predict) choices)
+  where
+    choices = toChoices status
+
+    predict choice = expectedValue do
+        nextStatus <- choice
+
+        finalStatus <- play objectiveFunction toChoices nextStatus
+
+        return (objectiveFunction finalStatus)
 
 -- | Prune a `Distribution` by consolidating duplicate outcomes
 prune :: Ord status => Distribution status -> Distribution status
@@ -316,18 +340,21 @@ cost card = case card of
     Bash           -> Just 2
     Ascender'sBane -> Nothing
 
-exampleChoices :: Status -> NonEmpty (Distribution Status)
+exampleChoices :: Status -> [Distribution Status]
 exampleChoices status₀ = do
-    let heuristic subsets =
-            case NonEmpty.nonEmpty filtered of
-                Nothing -> subsets
-                Just x  -> x
+    let done = ironcladHealth status₀ <= 0 || cultistHealth status₀ <= 0
+
+    Monad.guard (not done)
+
+    let heuristic subsets
+            | null filtered = subsets
+            | otherwise     = filtered
           where
-            filtered = filter predicate (NonEmpty.toList subsets)
+            filtered = filter predicate subsets
               where
                 predicate (_, remainingEnergy) = remainingEnergy <= 0
 
-    ~(subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
+    ~(subset, remainingEnergy) <- heuristic (NonEmpty.toList (subsetsByEnergy 3 (hand status₀)))
 
     return do
         let turn = do
@@ -411,18 +438,75 @@ exampleChoices status₀ = do
             , ironcladBlock        = ironcladBlock status + block
             }
 
+objective :: Status -> Double
+objective = fromIntegral . ironcladHealth
+
 game :: Distribution Status
 game = prune do
-    let objective = fromIntegral . ironcladHealth
+    initialStatus <- pure turn₁ -- possibleInitialStatuses
 
-    let done status = ironcladHealth status <= 0 || cultistHealth status <= 0
+    play objective exampleChoices initialStatus
 
-    initialStatus <- possibleInitialStatuses
+turn₁ :: Status
+turn₁ = Status
+    { cultistHealth = 53
+    , ironcladHealth = 68
+    , deck =
+        Map.fromList
+            [ (Strike, 2), (Defend, 2), (Bash, 1), (Ascender'sBane, 1) ]
+    , hand = Map.fromList [ (Strike, 3), (Defend, 2)  ]
+    , graveyard = Map.empty
+    , cultistVulnerability = 0
+    , ironcladBlock = 0
+    , energy = 3
+    , turn = 0
+    }
 
-    play objective done exampleChoices initialStatus
+turn₂ :: Status
+turn₂ = Status
+    { cultistHealth = 35
+    , ironcladHealth = 68
+    , deck = Map.fromList [ (Defend, 1) ]
+    , hand =
+        Map.fromList
+            [ (Bash, 1), (Strike, 2), (Defend, 1), (Ascender'sBane, 1) ]
+    , graveyard = Map.fromList [ (Strike, 3) , (Defend, 2) ]
+    , cultistVulnerability = 0
+    , ironcladBlock = 0
+    , energy = 3
+    , turn = 1
+    }
+
+turn₃ :: Status
+turn₃ = Status
+    { cultistHealth = 27
+    , ironcladHealth = 67
+    , deck = Map.fromList [ (Strike, 3), (Defend, 2) ]
+    , hand = Map.fromList [ (Bash, 1), (Strike, 2), (Defend, 2) ]
+    , graveyard = Map.fromList []
+    , cultistVulnerability = 1
+    , ironcladBlock = 0
+    , energy = 3
+    , turn = 2
+    }
+
+turn₄ :: Status
+turn₄ = Status
+    { cultistHealth = 18
+    , ironcladHealth = 66
+    , deck = Map.fromList []
+    , hand = Map.fromList [ (Strike, 3), (Defend, 2) ]
+    , graveyard = Map.fromList [ (Bash, 1), (Strike, 2) , (Defend, 2) ]
+    , cultistVulnerability = 0
+    , ironcladBlock = 0
+    , energy = 3
+    , turn = 3
+    }
 
 main :: IO ()
 main = do
     Pretty.pPrint (NonEmpty.toList (possibilities game))
 
     Pretty.pPrint (expectedValue (fmap (fromIntegral . ironcladHealth) game))
+
+    Pretty.pPrint (step objective exampleChoices turn₂)
