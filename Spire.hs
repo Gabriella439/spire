@@ -147,7 +147,11 @@ prune = mapToDistribution . distributionToMap
         return Possibility{ weight, outcome }
 
 -- | Ironclad cards
-data Card = Bash | Strike | Defend | Ascender'sBane
+data Card
+    = Bash
+    | Strike
+    | Defend
+    | Ascender'sBane
     deriving (Eq, Generic, Ord, Show)
 
 instance HasTrie Card where
@@ -340,11 +344,13 @@ cost card = case card of
     Bash           -> Just 2
     Ascender'sBane -> Nothing
 
+done :: Status -> Bool
+done Status{ ironcladHealth, cultistHealth } =
+    ironcladHealth <= 0 || cultistHealth <= 0
+
 exampleChoices :: Status -> [Distribution Status]
 exampleChoices status₀ = do
-    let done = ironcladHealth status₀ <= 0 || cultistHealth status₀ <= 0
-
-    Monad.guard (not done)
+    Monad.guard (not (done status₀))
 
     let heuristic subsets
             | null filtered = subsets
@@ -439,7 +445,7 @@ exampleChoices status₀ = do
             }
 
 objective :: Status -> Double
-objective = fromIntegral . ironcladHealth
+objective Status{ ironcladHealth } = fromIntegral ironcladHealth
 
 game :: Distribution Status
 game = prune do
