@@ -37,7 +37,7 @@ import qualified Text.Show.Pretty           as Pretty
     weight of that outcome
 -}
 data Possibility a
-    = Possibility { outcome :: !a, weight :: !Int }
+    = Possibility { outcome :: a, weight :: !Int }
     deriving (Functor, Show)
 
 -- | A probability distribution, which is a non-empty list of weighted outcomes
@@ -161,15 +161,15 @@ instance HasTrie Card where
 
 -- | Game state
 data Status = Status
-    { cultistHealth        :: !Int
-    , ironcladHealth       :: !Int
-    , deck                 :: !(Map Card Int)
-    , hand                 :: !(Map Card Int)
-    , graveyard            :: !(Map Card Int)
-    , cultistVulnerability :: !Int
-    , ironcladBlock        :: !Int
-    , energy               :: !Int
-    , turn                 :: !Int
+    { cultistHealth        :: Int
+    , ironcladHealth       :: Int
+    , deck                 :: Map Card Int
+    , hand                 :: Map Card Int
+    , graveyard            :: Map Card Int
+    , cultistVulnerability :: Int
+    , ironcladBlock        :: Int
+    , energy               :: Int
+    , turn                 :: Int
     } deriving (Eq, Generic, Ord, Show)
 
 instance HasTrie Status where
