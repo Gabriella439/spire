@@ -317,7 +317,7 @@ increase :: Ord k => Int -> k -> Map k Int -> Map k Int
 increase 0 _ = id
 increase n k = Map.insertWith (+) k n
 
-subsetsByEnergy :: Int -> Map Card Int -> NonEmpty (Map Card Int, Int)
+subsetsByEnergy :: Int -> Map Card Int -> [(Map Card Int, Int)]
 subsetsByEnergy remainingEnergy₀ hand₀ =
     loop (Map.toList hand₀) remainingEnergy₀ Map.empty
   where
@@ -326,7 +326,7 @@ subsetsByEnergy remainingEnergy₀ hand₀ =
             Just c -> do
                 let maxN = min (remainingEnergy `div` c) count
 
-                n <- 0 :| [ 1 .. maxN ]
+                n <- [ 0 .. maxN ]
 
                 let energyCost = n * c
 
@@ -427,7 +427,7 @@ exampleChoices status₀ = do
               where
                 predicate (_, remainingEnergy) = remainingEnergy <= 0
 
-    ~(subset, remainingEnergy) <- heuristic (NonEmpty.toList (subsetsByEnergy 3 (hand status₀)))
+    ~(subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
 
     return do
         let turn = do
