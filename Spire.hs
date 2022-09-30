@@ -443,7 +443,7 @@ objective = fromIntegral . ironcladHealth
 
 game :: Distribution Status
 game = prune do
-    initialStatus <- pure turn₁ -- possibleInitialStatuses
+    initialStatus <- possibleInitialStatuses
 
     play objective exampleChoices initialStatus
 
