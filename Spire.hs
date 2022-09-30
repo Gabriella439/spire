@@ -348,16 +348,6 @@ done :: Status -> Bool
 done Status{ ironcladHealth, cultistHealth } =
     ironcladHealth <= 0 || cultistHealth <= 0
 
-beginTurn :: StateT Status Distribution ()
-beginTurn = do
-    drawMany 5
-
-    State.modify (\status -> status
-        { ironcladBlock = 0
-        , energy = 3
-        , turn = turn status + 1
-        })
-
 act :: Card -> StateT Status Distribution ()
 act card = do
     status <- State.get
@@ -415,9 +405,17 @@ endTurn = do
         , cultistVulnerability = newCultistVulnerability
         }
 
+    drawMany 5
+
+    State.modify (\s -> s
+        { ironcladBlock = 0
+        , energy = 3
+        , turn = turn status + 1
+        })
+
 exampleChoices :: Status -> [Distribution Status]
-exampleChoices status₀ = do
-    Monad.guard (not (done status₀))
+exampleChoices status = do
+    Monad.guard (not (done status))
 
     let heuristic subsets
             | null filtered = subsets
@@ -427,11 +425,12 @@ exampleChoices status₀ = do
               where
                 predicate (_, remainingEnergy) = remainingEnergy <= 0
 
-    ~(subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status₀))
+    ~(subset, remainingEnergy) <- heuristic (subsetsByEnergy 3 (hand status))
 
     return do
-        let turn = do
-                State.modify (\status -> status{ energy = remainingEnergy })
+        let turn :: StateT Status Distribution ()
+            turn = do
+                State.modify (\s -> s{ energy = remainingEnergy })
 
                 let process card count = do
                         Monad.replicateM_ count (act card)
@@ -440,9 +439,7 @@ exampleChoices status₀ = do
 
                 endTurn
 
-                beginTurn
-
-        State.execStateT turn status₀
+        State.execStateT turn status
 
 objective :: Status -> Double
 objective Status{ ironcladHealth } = fromIntegral ironcladHealth
