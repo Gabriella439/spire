@@ -348,6 +348,73 @@ done :: Status -> Bool
 done Status{ ironcladHealth, cultistHealth } =
     ironcladHealth <= 0 || cultistHealth <= 0
 
+beginTurn :: StateT Status Distribution ()
+beginTurn = do
+    drawMany 5
+
+    State.modify (\status -> status
+        { ironcladBlock = 0
+        , energy = 3
+        , turn = turn status + 1
+        })
+
+act :: Card -> StateT Status Distribution ()
+act card = do
+    status <- State.get
+
+    let vulnerability = case card of
+            Bash -> 2
+            _    -> 0
+
+    let damageMultiplier =
+            if 1 <= cultistVulnerability status then 1.5 else 1
+
+    let baseDamage = case card of
+            Strike -> 6
+            Bash   -> 8
+            _      -> 0
+
+    let damage = truncate (baseDamage * damageMultiplier :: Double)
+
+    let block = case card of
+            Defend -> 5
+            _      -> 0
+
+    let newCultistHealth = max 0 (cultistHealth status - damage)
+
+    State.put status
+        { hand                 = decrease 1 card (hand status)
+        , graveyard            = increase 1 card (graveyard status)
+        , cultistHealth        = newCultistHealth
+        , cultistVulnerability = cultistVulnerability status + vulnerability
+        , ironcladBlock        = ironcladBlock status + block
+        }
+
+endTurn :: StateT Status Distribution ()
+endTurn = do
+    status <- State.get
+
+    let newCultistVulnerability = max 0 (cultistVulnerability status - 1)
+
+    let cultistDamage = if turn status == 0 then 0 else 1 + 5 * turn status
+
+    let cultistUnblockedDamage =
+            if 0 < cultistHealth status
+            then max 0 (cultistDamage - ironcladBlock status)
+            else 0
+
+    let newIroncladHealth =
+            max 0 (ironcladHealth status - cultistUnblockedDamage)
+
+    let exhaustedHand = Map.delete Ascender'sBane (hand status)
+
+    State.put status
+        { hand = Map.empty
+        , graveyard = Map.unionWith (+) exhaustedHand (graveyard status)
+        , ironcladHealth = newIroncladHealth
+        , cultistVulnerability = newCultistVulnerability
+        }
+
 exampleChoices :: Status -> [Distribution Status]
 exampleChoices status₀ = do
     Monad.guard (not (done status₀))
@@ -376,73 +443,6 @@ exampleChoices status₀ = do
                 beginTurn
 
         State.execStateT turn status₀
-  where
-    endTurn :: StateT Status Distribution ()
-    endTurn = do
-        status <- State.get
-
-        let newCultistVulnerability = max 0 (cultistVulnerability status - 1)
-
-        let cultistDamage = if turn status == 0 then 0 else 1 + 5 * turn status
-
-        let cultistUnblockedDamage =
-                if 0 < cultistHealth status
-                then max 0 (cultistDamage - ironcladBlock status)
-                else 0
-
-        let newIroncladHealth =
-                max 0 (ironcladHealth status - cultistUnblockedDamage)
-
-        let exhaustedHand = Map.delete Ascender'sBane (hand status)
-
-        State.put status
-            { hand = Map.empty
-            , graveyard = Map.unionWith (+) exhaustedHand (graveyard status)
-            , ironcladHealth = newIroncladHealth
-            , cultistVulnerability = newCultistVulnerability
-            }
-
-    beginTurn :: StateT Status Distribution ()
-    beginTurn = do
-        drawMany 5
-
-        State.modify (\status -> status
-            { ironcladBlock = 0
-            , energy = 3
-            , turn = turn status + 1
-            })
-
-    act :: Card -> StateT Status Distribution ()
-    act card = do
-        status <- State.get
-
-        let vulnerability = case card of
-                Bash -> 2
-                _    -> 0
-
-        let damageMultiplier =
-                if 1 <= cultistVulnerability status then 1.5 else 1
-
-        let baseDamage = case card of
-                Strike -> 6
-                Bash   -> 8
-                _      -> 0
-
-        let damage = truncate (baseDamage * damageMultiplier :: Double)
-
-        let block = case card of
-                Defend -> 5
-                _      -> 0
-
-        let newCultistHealth = max 0 (cultistHealth status - damage)
-
-        State.put status
-            { hand                 = decrease 1 card (hand status)
-            , graveyard            = increase 1 card (graveyard status)
-            , cultistHealth        = newCultistHealth
-            , cultistVulnerability = cultistVulnerability status + vulnerability
-            , ironcladBlock        = ironcladBlock status + block
-            }
 
 objective :: Status -> Double
 objective Status{ ironcladHealth } = fromIntegral ironcladHealth
