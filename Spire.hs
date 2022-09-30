@@ -63,7 +63,7 @@ instance Monad Distribution where
         return $! Possibility y (weight0 * weight1)
 
 -- | Compute the expected value for a probability distribution
-expectedValue :: Fractional n => Distribution n -> n
+expectedValue :: Fractional number => Distribution number -> number
 expectedValue Distribution{ possibilities } =
     totalTally / fromIntegral totalWeight
   where
@@ -75,8 +75,8 @@ expectedValue Distribution{ possibilities } =
 
 -- | Play the game optimally to its conclusion
 play
-    :: (Fractional n, Ord n, HasTrie state)
-    => (state -> n)
+    :: (Fractional number, Ord number, HasTrie state)
+    => (state -> number)
     -- ^ Objective function
     -> (state -> [Distribution state])
     -- ^ A function which generates the available moves
@@ -106,8 +106,8 @@ play objectiveFunction toChoices = MemoTrie.memoFix memoized
 
 -- | Play the game optimally for one step
 step
-    :: (Fractional n, Ord n, HasTrie state)
-    => (state -> n)
+    :: (Fractional number, Ord number, HasTrie state)
+    => (state -> number)
     -- ^ Objective function
     -> (state -> [Distribution state])
     -- ^ A function which generates the available moves
