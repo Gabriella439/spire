@@ -287,7 +287,7 @@ possibleInitialStatuses = do
             , outcome =
                 Status
                   { cultistHealth
-                  , ironcladHealth = 80
+                  , ironcladHealth = 68
                   , deck =
                       Map.fromList
                         [ (Strike, 5)
