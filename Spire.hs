@@ -7,6 +7,7 @@
 {-# LANGUAGE DerivingVia                #-}
 {-# LANGUAGE ExplicitNamespaces         #-}
 {-# LANGUAGE NamedFieldPuns             #-}
+{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE UndecidableInstances       #-}
@@ -37,7 +38,7 @@ import qualified Text.Show.Pretty           as Pretty
     weight of that outcome
 -}
 data Possibility a
-    = Possibility { outcome :: a, weight :: !Int }
+    = Possibility { outcome :: a, weight :: !Rational }
     deriving (Functor, Show)
 
 -- | A probability distribution, which is a non-empty list of weighted outcomes
@@ -64,14 +65,9 @@ instance Monad Distribution where
 
 -- | Compute the expected value for a probability distribution
 expectedValue :: Fractional number => Distribution number -> number
-expectedValue Distribution{ possibilities } =
-    totalTally / fromIntegral totalWeight
+expectedValue Distribution{ possibilities } = sum (fmap weigh possibilities)
   where
-    totalTally = sum (fmap tally possibilities)
-
-    totalWeight = sum (fmap weight possibilities)
-
-    tally Possibility{ outcome, weight } = fromIntegral weight * outcome
+    weigh Possibility{ outcome, weight } = fromRational weight * outcome
 
 -- | Play the game optimally to its conclusion
 play
@@ -134,13 +130,14 @@ step objectiveFunction toChoices status =
 prune :: Ord status => Distribution status -> Distribution status
 prune = mapToDistribution . distributionToMap
   where
-    distributionToMap :: Ord status => Distribution status -> Map status Int
+    distributionToMap
+        :: Ord status => Distribution status -> Map status Rational
     distributionToMap Distribution{ possibilities } = Map.fromListWith (+) do
         ~Possibility{ outcome, weight } <- NonEmpty.toList possibilities
 
         return (outcome, weight)
 
-    mapToDistribution :: Map status Int -> Distribution status
+    mapToDistribution :: Map status Rational -> Distribution status
     mapToDistribution m = Distribution do
         ~(outcome, weight) <- NonEmpty.fromList (Map.toList m)
 
@@ -152,7 +149,7 @@ data Card
     | Strike
     | Defend
     | Ascender'sBane
-    deriving (Eq, Generic, Ord, Show)
+    deriving (Bounded, Enum, Eq, Generic, Ord, Show)
 
 instance HasTrie Card where
     newtype (Card :->: b) = CardTrie { unCardTrie :: Reg Card :->: b }
@@ -207,15 +204,24 @@ subsetsOf remaining₀ pool
     | size₀ < remaining₀ = Nothing
     | otherwise = Just Distribution{ possibilities }
   where
-    possibilities = loop size₀ (Map.toList pool) remaining₀ Map.empty Map.empty
+    nonNormalizedPossibilities =
+        loop size₀ (Map.toList pool) remaining₀ Map.empty Map.empty
+
+    possibilities = fmap adapt nonNormalizedPossibilities
+      where
+        adapt possibility =
+            possibility
+                { weight =
+                      weight possibility / sum (fmap weight nonNormalizedPossibilities)
+                }
 
     size₀ = sum (Map.elems pool)
 
     toPossibility subset unselected = Possibility{ weight, outcome }
       where
-        weigh (key, count) = (pool ! key) `choose` count
+        weigh (key, count) = fromIntegral (pool ! key) `choose` count
 
-        weight = product (map weigh (Map.toList subset))
+        weight = fromIntegral (product (map weigh (Map.toList subset)))
 
         outcome = (subset, unselected)
 
@@ -283,7 +289,7 @@ possibleInitialStatuses = do
 
         return
           Possibility
-            { weight = 1
+            { weight = 1 / 7
             , outcome =
                 Status
                   { cultistHealth
@@ -441,7 +447,7 @@ exampleChoices status = do
 
         State.execStateT turn status
 
-objective :: Status -> Double
+objective :: Status -> Rational
 objective Status{ ironcladHealth } = fromIntegral ironcladHealth
 
 game :: Distribution Status
@@ -506,10 +512,19 @@ turn₄ = Status
     , turn = 3
     }
 
+printRational :: Rational -> IO ()
+printRational rational = putStrLn string
+  where
+    string =
+            show (fromRational rational :: Double)
+        <>  " ("
+        <>  show rational
+        <>  ")"
+
 main :: IO ()
 main = do
     Pretty.pPrint (NonEmpty.toList (possibilities game))
 
-    Pretty.pPrint (expectedValue (fmap (fromIntegral . ironcladHealth) game))
+    printRational (expectedValue (fmap objective game))
 
     Pretty.pPrint (step objective exampleChoices turn₂)
