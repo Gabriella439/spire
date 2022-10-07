@@ -526,5 +526,3 @@ main = do
     Pretty.pPrint (NonEmpty.toList (possibilities game))
 
     printRational (expectedValue (fmap objective game))
-
-    Pretty.pPrint (step objective exampleChoices turn₂)
